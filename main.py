@@ -1,42 +1,34 @@
 import ui
 import csv
 import os
+import sound
 from datetime import datetime
 
 class AdvancedTicTacToe(ui.View):
-    """
-    3手制限ルールを採用した◯×ゲーム
-    4手目を打つと自分の最も古い印が消える。
-    """
     def __init__(self):
-        # 画面設定
         self.name = '3-Move Limit Tic-Tac-Toe'
         self.background_color = '#fdfdfd'
         
-        # ゲーム状態の初期化
-        self.current_player_mark = '◯' 
-        self.move_history = {'◯': [], '✖': []} 
+        # ゲームデータの管理
+        self.current_player_mark = '◯'
+        self.move_history = {'◯': [], '✖': []}
+        self.session_log = [] # 1試合分のデータを一時保存するリスト
         self.buttons = []
         
-        # フォルダとファイル名の設定
+        # ディレクトリ設定
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.data_dir = os.path.join(self.base_dir, '../data')
-        
-        # 起動時の日時でログファイル名を生成
-        file_timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-        self.log_file = os.path.join(self.data_dir, f'game_log_{file_timestamp}.csv')
-        
-        # 準備
         self._setup_directory()
-        self._create_board_ui()
+        
+        # UI作成
+        self._create_ui()
         
     def _setup_directory(self):
-        """保存用ディレクトリの作成"""
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir, exist_ok=True)
 
-    def _create_board_ui(self):
-        """3x3のゲームボードUIを作成"""
+    def _create_ui(self):
+        # 3x3のゲームボード作成
         cell_size = 90
         margin = 5
         start_x = 45
@@ -48,7 +40,6 @@ class AdvancedTicTacToe(ui.View):
             btn.frame = (col * (cell_size + margin) + start_x, 
                          row * (cell_size + margin) + start_y, 
                          cell_size, cell_size)
-            
             btn.background_color = 'white'
             btn.tint_color = '#333333'
             btn.font = ('<System-Bold>', 40)
@@ -56,76 +47,92 @@ class AdvancedTicTacToe(ui.View):
             btn.border_color = '#dddddd'
             btn.corner_radius = 10
             btn.action = self.cell_tapped
-            
             self.add_subview(btn)
             self.buttons.append(btn)
+            
+        # クリアボタンの設置
+        clear_btn = ui.Button(title='Clear / Save Game')
+        clear_btn.frame = (start_x, start_y + 300, cell_size * 3 + margin * 2, 44)
+        clear_btn.background_color = '#ff9500'
+        clear_btn.tint_color = 'white'
+        clear_btn.font = ('<System-Bold>', 18)
+        clear_btn.corner_radius = 8
+        clear_btn.action = self.clear_button_tapped
+        self.add_subview(clear_btn)
 
     def cell_tapped(self, sender):
-        """マスがタップされた時の処理"""
-        # すでに印があるマスは無効
-        if sender.title:
-            return 
+        if sender.title: return 
 
-        # 1. 座標とプレイヤー情報の特定
+        sound.play_effect('ui:click_1')
+        
+        # 1. 指し手情報の記録
         index = int(sender.name)
         y, x = divmod(index, 3)
         player_id = '0' if self.current_player_mark == '◯' else '1'
+        now = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        # 2. ログの保存 (player, hand, timestamp, x, y)
-        self.save_log(player_id, self.current_player_mark, x, y)
+        # リストに一時保存 (CSV書き出し用)
+        self.session_log.append([player_id, self.current_player_mark, now, x, y])
 
-        # 3. 印を配置し、履歴に追加
+        # 2. 盤面への反映
         sender.title = self.current_player_mark
         self.move_history[self.current_player_mark].append(sender)
         
-        # 4. 【特殊ルール】4手目を打った場合、自分の1手目を消去
+        # 3. 特殊ルール（4手前を消す）
         if len(self.move_history[self.current_player_mark]) > 3:
             oldest_btn = self.move_history[self.current_player_mark].pop(0)
             oldest_btn.title = ''
             
-        # 5. 勝利判定
+        # 4. 勝利判定
         if self.check_winner():
+            sound.play_effect('arcade:Powerup_1')
             ui.hud_alert(f'Player {player_id} Wins!')
-            self.reset_game()
+            self.save_and_reset() # 保存してリセット
             return
 
-        # 6. ターン交代
+        # 5. ターン交代
         self.current_player_mark = '✖' if self.current_player_mark == '◯' else '◯'
 
     def check_winner(self):
-        """勝利条件（縦・横・斜め）のチェック"""
         b = [btn.title for btn in self.buttons]
-        win_patterns = [
-            (0, 1, 2), (3, 4, 5), (6, 7, 8), # 横
-            (0, 3, 6), (1, 4, 7), (2, 5, 8), # 縦
-            (0, 4, 8), (2, 4, 6)             # 斜め
-        ]
+        win_patterns = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
         for p in win_patterns:
             if b[p[0]] == b[p[1]] == b[p[2]] != '':
                 return True
         return False
 
-    def save_log(self, player_id, hand, x, y):
-        """プレイログをCSVに書き込み"""
-        now = datetime.now().strftime('%Y%m%d_%H%M%S')
-        file_exists = os.path.isfile(self.log_file)
+    def clear_button_tapped(self, sender):
+        """クリアボタンが押された時の処理"""
+        if self.session_log:
+            sound.play_effect('ui:click_2')
+            self.save_and_reset()
+            ui.hud_alert('Game Saved & Reset')
+        else:
+            ui.hud_alert('No moves to save')
+
+    def save_and_reset(self):
+        """現在のセッションログをCSVに保存し、ゲームをリセットする"""
+        if not self.session_log:
+            return
+
+        # 保存時の時間でファイル名を生成
+        save_timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        filename = os.path.join(self.data_dir, f'game_log_{save_timestamp}.csv')
         
         try:
-            with open(self.log_file, 'a', encoding='utf-8', newline='') as f:
+            with open(filename, 'w', encoding='utf-8', newline='') as f:
                 writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(['player', 'hand', 'timestamp', 'x', 'y'])
-                writer.writerow([player_id, hand, now, x, y])
-        except IOError as e:
-            print(f"Log save error: {e}")
+                writer.writerow(['player', 'hand', 'timestamp', 'x', 'y'])
+                writer.writerows(self.session_log)
+        except Exception as e:
+            print(f"Save error: {e}")
 
-    def reset_game(self):
-        """ゲーム盤面のリセット"""
+        # 状態リセット
         for btn in self.buttons:
             btn.title = ''
         self.move_history = {'◯': [], '✖': []}
+        self.session_log = []
         self.current_player_mark = '◯'
 
 if __name__ == '__main__':
-    view = AdvancedTicTacToe()
-    view.present('sheet')
+    AdvancedTicTacToe().present('sheet')
